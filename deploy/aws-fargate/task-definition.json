@@ -1,0 +1,30 @@
+{
+  "family": "telemetry-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/<EXECUTION_ROLE_NAME>",
+  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/<TASK_ROLE_NAME>",
+  "containerDefinitions": [
+    {
+      "name": "telemetry-api",
+      "image": "<ECR_OR_GHCR_IMAGE_TAG>",
+      "portMappings": [{ "containerPort": 8080, "protocol": "tcp" }],
+      "essential": true,
+      "environment": [
+        { "name": "ASPNETCORE_URLS", "value": "http://+:8080" },
+        { "name": "ASPNETCORE_ENVIRONMENT", "value": "Production" },
+        { "name": "ConnectionStrings__Oracle", "value": "<ORACLE_CONNSTRING>" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/telemetry-api",
+          "awslogs-region": "<AWS_REGION>",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

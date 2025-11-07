@@ -1,0 +1,18 @@
+# Build & publish
+bin/
+obj/
+/artifacts/
+/dist/
+/node_modules/
+/coverage/
+# Rider/VS/VSCode
+.vscode/
+.vs/
+.idea/
+*.user
+*.suo
+# OS
+.DS_Store
+Thumbs.db
+# Logs
+*.log
