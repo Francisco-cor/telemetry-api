@@ -6,15 +6,17 @@ namespace Telemetry.Api.Infra;
 public class TelemDb : DbContext
 {
     public TelemDb(DbContextOptions<TelemDb> options) : base(options) { }
+
     public DbSet<TelemetryEvent> Telemetry => Set<TelemetryEvent>();
 
-    protected override void OnModelCreating(ModelBuilder mb)
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        var e = mb.Entity<TelemetryEvent>();
-        e.HasKey(t => t.Id);
-        e.Property(t => t.Source).HasMaxLength(100).IsRequired();
-        e.Property(t => t.MetricName).HasMaxLength(100).IsRequired();
-        e.HasIndex(t => new { t.Source, t.Timestamp })
-         .HasDatabaseName("IX_Telemetry_Source_Ts");
+        var entity = modelBuilder.Entity<TelemetryEvent>();
+        entity.ToTable("TelemetryEvent");
+        entity.HasKey(e => e.Id);
+        entity.Property(e => e.Source).HasMaxLength(100).IsRequired();
+        entity.Property(e => e.MetricName).HasMaxLength(100).IsRequired();
+        entity.HasIndex(e => new { e.Source, e.Timestamp })
+              .HasDatabaseName("IX_Telemetry_Source_Timestamp");
     }
 }

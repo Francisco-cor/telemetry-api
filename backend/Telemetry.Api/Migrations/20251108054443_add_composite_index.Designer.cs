@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Oracle.EntityFrameworkCore.Metadata;
 using Telemetry.Api.Infra;
@@ -11,9 +12,11 @@ using Telemetry.Api.Infra;
 namespace Telemetry.Api.Migrations
 {
     [DbContext(typeof(TelemDb))]
-    partial class TelemDbModelSnapshot : ModelSnapshot
+    [Migration("20251108054443_add_composite_index")]
+    partial class add_composite_index
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
