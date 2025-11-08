@@ -16,7 +16,8 @@ services:
   api:
     build: ./backend/Telemetry.Api
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__Db=User Id=telem;Password=telem_pw;Data Source=db:1521/XEPDB1;
     ports:
       - "5080:8080"
     depends_on:

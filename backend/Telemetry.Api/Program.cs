@@ -10,9 +10,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddDbContext<TelemDb>(opts =>
-    opts.UseOracle(builder.Configuration.GetConnectionString("Oracle") ??
-                   "User Id=telem;Password=telem_pw;Data Source=localhost:1521/XEPDB1;"));
+// Lee la cadena de conexión "Db" proporcionada por la variable de entorno.
+var connectionString = builder.Configuration.GetConnectionString("Db");
+builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(connectionString));
 
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
 
@@ -67,7 +67,7 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
         query = query.Where(t => t.Source == source);
 
     if (startDate.HasValue && endDate.HasValue)
-        query = query.Where(t => t.Timestamp >= startDate && t.Timestamp <= endDate);
+        query = query.Where(t => t.Timestamp >= startDate.Value && t.Timestamp <= endDate.Value);
 
     var totalCount = await query.CountAsync();
 
