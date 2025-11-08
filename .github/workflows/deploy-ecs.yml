@@ -1,0 +1,69 @@
+name: deploy-ecs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "backend/Telemetry.Api/**"
+      - "deploy/**"
+      - ".github/workflows/deploy-ecs.yml"
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/telemetry-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Si tu imagen en GHCR es PRIVADA y la usará ECS, necesitas ECR o credenciales de registro en el Task Execution Role.
+      # Aquí solo construimos tags útiles para info/log.
+      - name: Compute tags
+        id: meta
+        run: |
+          SHA_TAG=${GITHUB_SHA::7}
+          echo "sha=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      # Autenticación OIDC a AWS (recomendado) o usa claves si aún no configuras OIDC.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+      # (Opcional) Si también quieres build & push desde aquí a GHCR, puedes repetir el paso del pipeline de CI.
+      # Normalmente CI ya empujó la imagen, aquí solo actualizamos la tarea/servicio.
+      - name: Render task definition
+        id: render
+        run: |
+          sed -e "s|<OWNER>|${GITHUB_REPOSITORY_OWNER,,}|g" \
+              -e "s|<REPO>|${GITHUB_REPOSITORY#*/}|g" \
+              -e "s|<ACCOUNT_ID>|${{ secrets.AWS_ACCOUNT_ID }}|g" \
+              -e "s|<REGION>|${{ env.AWS_REGION }}|g" \
+              deploy/ecs-task-def.json > /tmp/ecs-task-def.rendered.json
+          cat /tmp/ecs-task-def.rendered.json
+
+      - name: Register task definition
+        id: register
+        run: |
+          TASK_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/ecs-task-def.rendered.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
+
+      - name: Update service
+        run: |
+          jq \
+            --arg taskArn "${{ steps.register.outputs.task_arn }}" \
+            '.taskDefinition = $taskArn' \
+            deploy/ecs-service-params.json > /tmp/ecs-service-params.rendered.json
+
+          aws ecs update-service \
+            --cli-input-json file:///tmp/ecs-service-params.rendered.json

@@ -1,0 +1,6 @@
+{
+  "cluster": "<ECS_CLUSTER_NAME>",
+  "service": "<ECS_SERVICE_NAME>",
+  "desiredCount": 1,
+  "forceNewDeployment": true
+}
