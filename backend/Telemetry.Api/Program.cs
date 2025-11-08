@@ -7,10 +7,13 @@ using Telemetry.Api.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configuración de Logging
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Lee la cadena de conexión "Db" proporcionada por la variable de entorno.
 var connectionString = builder.Configuration.GetConnectionString("Db");
 builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(connectionString));
 
@@ -21,7 +24,22 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Endpoints de Health Check
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapGet("/health/db", async (TelemDb db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1 FROM DUAL");
+        return Results.Ok(new { db = "ok" });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(title: "DB check failed", detail: ex.Message, statusCode: 500);
+    }
+});
+
 
 // ---------- POST /api/telemetry ----------
 app.MapPost("/api/telemetry", async (TelemDb db, IValidator<TelemetryIngestBatch> validator, TelemetryIngestBatch batch) =>
