@@ -18,8 +18,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__Db=User Id=telem;Password=telem_pw;Data Source=db:1521/XEPDB1;
-      - Logging__Console__FormatterName=json
+      - ConnectionStrings__Db=User Id=telem;Password=telem_pw;Data Source=(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=db)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=XEPDB1)));
     ports:
       - "5080:8080"
     depends_on:

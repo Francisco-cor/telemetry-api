@@ -1,20 +1,35 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
+using Serilog;
+using Serilog.Formatting.Compact;
 using Telemetry.Api.Infra;
 using Telemetry.Api.Domain;
 using Telemetry.Api.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configuración de Logging
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole();
+// Serilog mínimo y robusto, sin depender de appsettings.json
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .Enrich.FromLogContext()
+    .Enrich.WithMachineName()
+    .Enrich.WithThreadId()
+    .WriteTo.Console(new CompactJsonFormatter())
+    .CreateBootstrapLogger();
+
+builder.Host.UseSerilog();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Verificación explícita de la cadena de conexión
 var connectionString = builder.Configuration.GetConnectionString("Db");
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    Log.Fatal("La cadena de conexión 'Db' no se ha encontrado. Revisa las variables de entorno en docker-compose.yml.");
+    throw new InvalidOperationException("Connection string 'Db' is not configured.");
+}
 builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(connectionString));
 
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
@@ -23,8 +38,8 @@ var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseSerilogRequestLogging();
 
-// Endpoints de Health Check
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapGet("/health/db", async (TelemDb db) =>
@@ -36,10 +51,10 @@ app.MapGet("/health/db", async (TelemDb db) =>
     }
     catch (Exception ex)
     {
-        return Results.Problem(title: "DB check failed", detail: ex.Message, statusCode: 500);
+        Log.Error(ex, "El health check de la base de datos ha fallado.");
+        return Results.Problem(title: "DB check failed", detail: "Database is not reachable.", statusCode: 500);
     }
 });
-
 
 // ---------- POST /api/telemetry ----------
 app.MapPost("/api/telemetry", async (TelemDb db, IValidator<TelemetryIngestBatch> validator, TelemetryIngestBatch batch) =>
@@ -108,4 +123,16 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
 .WithName("GetTelemetry")
 .Produces(StatusCodes.Status200OK);
 
-app.Run();
+try
+{
+    Log.Information("Iniciando la aplicación Telemetry API");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "La aplicación ha fallado al iniciar.");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
