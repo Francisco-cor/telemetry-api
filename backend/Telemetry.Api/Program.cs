@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
-using FluentValidation.Results;
 using Telemetry.Api.Infra;
 using Telemetry.Api.Domain;
 using Telemetry.Api.Api;
@@ -12,10 +11,8 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddDbContext<TelemDb>(opts =>
-    opts.UseOracle(builder.Configuration.GetConnectionString("Oracle")));
-
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole();
+    opts.UseOracle(builder.Configuration.GetConnectionString("Oracle") ??
+                   "User Id=telem;Password=telem_pw;Data Source=localhost:1521/XEPDB1;"));
 
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
 
@@ -26,61 +23,71 @@ app.UseSwaggerUI();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/api/telemetry", async Task<Results<BadRequest<ProblemDetails>, Created>>
-    (TelemDb db, IValidator<TelemetryIngestBatch> validator, TelemetryIngestBatch batch) =>
+// ---------- POST /api/telemetry ----------
+app.MapPost("/api/telemetry", async (TelemDb db, IValidator<TelemetryIngestBatch> validator, TelemetryIngestBatch batch) =>
 {
-    ValidationResult vr = await validator.ValidateAsync(batch);
-    if (!vr.IsValid)
+    var validation = await validator.ValidateAsync(batch);
+    if (!validation.IsValid)
     {
-        var pd = new ProblemDetails
+        var details = new ProblemDetails
         {
             Title = "Invalid payload",
-            Detail = string.Join("; ", vr.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"))
+            Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"))
         };
-        return TypedResults.BadRequest(pd);
+        return Results.BadRequest(details);
     }
 
-    var events = batch.Events.Select(dto => new TelemetryEvent
+    var events = batch.Events.Select(e => new TelemetryEvent
     {
         Id = Guid.NewGuid(),
-        Timestamp = dto.Timestamp,
-        Source = dto.Source,
-        MetricName = dto.MetricName,
-        MetricValue = dto.MetricValue
+        Timestamp = e.Timestamp,
+        Source = e.Source,
+        MetricName = e.MetricName,
+        MetricValue = e.MetricValue
     }).ToList();
 
     await db.Telemetry.AddRangeAsync(events);
     await db.SaveChangesAsync();
 
-    return TypedResults.Created($"/api/telemetry?count={events.Count}");
+    return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
 })
+.WithName("PostTelemetry")
 .Produces(StatusCodes.Status201Created)
 .ProducesProblem(StatusCodes.Status400BadRequest);
 
-app.MapGet("/api/telemetry", async Task<Ok<object>>
-    (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
+// ---------- GET /api/telemetry ----------
+app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
 {
-    page = page < 1 ? 1 : page;
+    page = Math.Max(page, 1);
     pageSize = pageSize is < 1 or > 500 ? 100 : pageSize;
 
-    var q = db.Telemetry.AsNoTracking();
+    var query = db.Telemetry.AsNoTracking();
 
     if (!string.IsNullOrWhiteSpace(source))
-        q = q.Where(t => t.Source == source);
+        query = query.Where(t => t.Source == source);
 
     if (startDate.HasValue && endDate.HasValue)
-        q = q.Where(t => t.Timestamp >= startDate && t.Timestamp <= endDate);
+        query = query.Where(t => t.Timestamp >= startDate && t.Timestamp <= endDate);
 
-    var total = await q.CountAsync();
-    var rows = await q
+    var totalCount = await query.CountAsync();
+
+    var items = await query
         .OrderByDescending(t => t.Timestamp)
         .Skip((page - 1) * pageSize)
         .Take(pageSize)
-        .Select(t => new { t.Id, t.Timestamp, t.Source, t.MetricName, t.MetricValue })
+        .Select(t => new
+        {
+            t.Id,
+            t.Timestamp,
+            t.Source,
+            t.MetricName,
+            t.MetricValue
+        })
         .ToListAsync();
 
-    return TypedResults.Ok(new { items = rows, totalCount = total, page, pageSize });
+    return Results.Ok(new { items, totalCount, page, pageSize });
 })
+.WithName("GetTelemetry")
 .Produces(StatusCodes.Status200OK);
 
 app.Run();
