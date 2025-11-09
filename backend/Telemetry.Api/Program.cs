@@ -14,6 +14,7 @@ using Telemetry.Api.Domain;
 using Telemetry.Api.Api;
 using Telemetry.Api.Middleware;
 using Telemetry.Api.Swagger;
+using Telemetry.Api.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
