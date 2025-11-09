@@ -1,4 +1,3 @@
-
 # 🛰️ Telemetry API — .NET 8 + Oracle EF Core + AWS Fargate
 
 **Goal:** Provide a production-ready telemetry ingestion and query API with a lightweight, containerized architecture.
@@ -153,3 +152,32 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 ## 🪪 License
 
 MIT — 2025 © Francisco Cordero Aguero
+
+---
+
+## 🧪 Testing Strategy
+
+Integration tests (xUnit + WebApplicationFactory + SQLite in-memory) run automatically on CI to validate all endpoints:
+- ✅ **POST /api/telemetry** → 201 Created, batch insert validated
+- ✅ **GET /api/telemetry** → 200 OK, pagination and filters
+- 🧱 **/health/live** and **/health/ready** verify DB connectivity and readiness
+
+Local run:
+```bash
+dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
+```
+
+---
+
+## ⚡ Quickstart Summary
+
+```bash
+# 1. Build & run locally
+docker compose up --build
+
+# 2. Post sample telemetry
+curl -X POST http://localhost:5080/api/telemetry -H "Content-Type: application/json"   -d '{"events":[{"timestamp":"2025-11-08T08:00:00Z","source":"T-001","metricName":"RPM","metricValue":1900}]}'
+
+# 3. Query data
+curl "http://localhost:5080/api/telemetry?source=T-001&page=1&pageSize=5"
+```
