@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentValidation;
@@ -35,38 +37,65 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "Telemetry API", Version = "v1" });
     c.OperationFilter<AddCorrelationHeaderOperationFilter>();
+    c.OperationFilter<AddTooManyRequestsResponseOperationFilter>(); // ← nuevo
 });
 
-// Health checks: 'live' (self) y 'ready' (DB)
 builder.Services.AddHealthChecks()
     .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })
     .AddCheck<TelemDbReadyCheck>("db", tags: new[] { "ready" });
 
-// --- conexión ---
-var conn =
-    builder.Configuration.GetConnectionString("Db")
-    ?? builder.Configuration.GetConnectionString("Oracle");
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("fixed-per-ip", httpContext =>
+    {
+        var key = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: key,
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+            });
+    });
 
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.ContentType = "application/problem+json";
+        ctx.HttpContext.Response.Headers.RetryAfter = "60";
+
+        var problem = new
+        {
+            type = "about:blank",
+            title = "Too Many Requests",
+            status = 429,
+            detail = "Rate limit exceeded. See Retry-After header.",
+            traceId = ctx.HttpContext.TraceIdentifier
+        };
+        await ctx.HttpContext.Response.WriteAsync(JsonSerializer.Serialize(problem), ct);
+    };
+});
+
+// --- conexión ---
+var conn = builder.Configuration.GetConnectionString("Db") ?? builder.Configuration.GetConnectionString("Oracle");
 if (string.IsNullOrWhiteSpace(conn) && !builder.Environment.IsEnvironment("Testing"))
 {
     Log.Fatal("No connection string 'Db'/'Oracle' found.");
     throw new InvalidOperationException("Connection string 'Db'/'Oracle' is not configured.");
 }
-
 if (!builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(conn!));
 }
-
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
 
 var app = builder.Build();
 
-// --- Función para escribir la respuesta de Health Checks en formato JSON ---
 static Task WriteHealthJson(HttpContext ctx, HealthReport report)
 {
     ctx.Response.ContentType = "application/json; charset=utf-8";
-
     var payload = new
     {
         status = report.Status.ToString(),
@@ -78,16 +107,9 @@ static Task WriteHealthJson(HttpContext ctx, HealthReport report)
             error = e.Value.Exception?.Message
         })
     };
-
-    var options = new JsonSerializerOptions
-    {
-        WriteIndented = true, // Para mejor legibilidad
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
+    var options = new JsonSerializerOptions { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
     return ctx.Response.WriteAsync(JsonSerializer.Serialize(payload, options));
 }
-
 
 // --- Pipeline de Middleware ---
 app.UseCorrelationId();
@@ -103,24 +125,13 @@ app.UseSerilogRequestLogging(opts =>
         diag.Set("UserAgent", http.Request.Headers.UserAgent.ToString());
     };
 });
-
+app.UseRateLimiter();
 app.UseSwagger();
 app.UseSwaggerUI();
 
 // --- Endpoints ---
-
-// --- Health endpoints ---
-app.MapHealthChecks("/health/live", new HealthCheckOptions
-{
-    Predicate = r => r.Tags.Contains("live"),
-    ResponseWriter = WriteHealthJson
-});
-
-app.MapHealthChecks("/health/ready", new HealthCheckOptions
-{
-    Predicate = r => r.Tags.Contains("ready"),
-    ResponseWriter = WriteHealthJson
-});
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live"), ResponseWriter = WriteHealthJson });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready"), ResponseWriter = WriteHealthJson });
 
 // ---------- POST /api/telemetry ----------
 app.MapPost("/api/telemetry", async (
@@ -134,21 +145,10 @@ app.MapPost("/api/telemetry", async (
         var validation = await validator.ValidateAsync(batch);
         if (!validation.IsValid)
         {
-            var details = new ProblemDetails
-            {
-                Title = "Invalid payload",
-                Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"))
-            };
+            var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
             return Results.BadRequest(details);
         }
-        var events = batch.Events.Select(e => new TelemetryEvent
-        {
-            Id = Guid.NewGuid(),
-            Timestamp = e.Timestamp,
-            Source = e.Source,
-            MetricName = e.MetricName,
-            MetricValue = e.MetricValue
-        }).ToList();
+        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.NewGuid(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue }).ToList();
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
         return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
@@ -156,16 +156,16 @@ app.MapPost("/api/telemetry", async (
     catch (Exception ex)
     {
         Log.Error(ex, "Failed to ingest telemetry batch.");
-        return Results.Problem(
-            title: "Ingestion failed",
-            detail: ex.Message,
-            statusCode: StatusCodes.Status500InternalServerError);
+        return Results.Problem(title: "Ingestion failed", detail: ex.Message, statusCode: StatusCodes.Status500InternalServerError);
     }
 })
 .WithName("PostTelemetry")
+.WithMetadata(new RequestSizeLimitAttribute(256 * 1024))
+.RequireRateLimiting("fixed-per-ip")
 .Produces(StatusCodes.Status201Created)
 .ProducesProblem(StatusCodes.Status400BadRequest)
 .ProducesProblem(StatusCodes.Status500InternalServerError);
+
 
 // ---------- GET /api/telemetry ----------
 app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
@@ -182,18 +182,12 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
         .OrderByDescending(t => t.Timestamp)
         .Skip((page - 1) * pageSize)
         .Take(pageSize)
-        .Select(t => new
-        {
-            t.Id,
-            t.Timestamp,
-            t.Source,
-            t.MetricName,
-            t.MetricValue
-        })
+        .Select(t => new { t.Id, t.Timestamp, t.Source, t.MetricName, t.MetricValue })
         .ToListAsync();
     return Results.Ok(new { items, totalCount, page, pageSize });
 })
 .WithName("GetTelemetry")
+.RequireRateLimiting("fixed-per-ip")
 .Produces(StatusCodes.Status200OK);
 
 // --- Arranque y Migraciones ---
