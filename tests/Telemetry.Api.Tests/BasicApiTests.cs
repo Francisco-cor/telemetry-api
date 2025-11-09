@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Xunit;
 
 public class BasicApiTests : IClassFixture<TelemetryApiFactory>
 {
