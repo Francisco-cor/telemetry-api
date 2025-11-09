@@ -1,14 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi.Models;
 using FluentValidation;
 using Serilog;
 using Serilog.Context;
 using Serilog.Formatting.Compact;
-using Microsoft.OpenApi.Models;
 using Telemetry.Api.Infra;
 using Telemetry.Api.Domain;
 using Telemetry.Api.Api;
 using Telemetry.Api.Middleware;
+using Telemetry.Api.Swagger;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,7 +29,7 @@ builder.Services.AddEndpointsApiExplorer();
 // Ajuste en Swagger para visibilidad del header de correlación
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Telemetry API", Version = "v1" });
+    c.SwaggerDoc("v1", new() { Title = "Telemetry API", Version = "v1" });
     c.OperationFilter<AddCorrelationHeaderOperationFilter>();
 });
 
