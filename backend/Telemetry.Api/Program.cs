@@ -2,10 +2,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using FluentValidation;
 using Serilog;
+using Serilog.Context;
 using Serilog.Formatting.Compact;
+using Microsoft.OpenApi.Models;
 using Telemetry.Api.Infra;
 using Telemetry.Api.Domain;
 using Telemetry.Api.Api;
+using Telemetry.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +24,13 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+// Ajuste en Swagger para visibilidad del header de correlación
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Telemetry API", Version = "v1" });
+    c.OperationFilter<AddCorrelationHeaderOperationFilter>();
+});
 
 // --- conexión ---
 var conn =
@@ -48,9 +57,34 @@ builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValid
 
 var app = builder.Build();
 
+// --- Pipeline de Middleware ---
+
+// Correlation Id primero en la cadena
+app.UseCorrelationId();
+
+// Serilog Request Logging enriquecido
+app.UseSerilogRequestLogging(opts =>
+{
+    // Mensaje compacto por request
+    opts.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0} ms (corrId: {CorrelationId})";
+
+    // Enriquecer el contexto con datos útiles
+    opts.EnrichDiagnosticContext = (diag, http) =>
+    {
+        var corr = http.Request.Headers[CorrelationIdMiddleware.HeaderName].ToString() ??
+                   http.TraceIdentifier;
+
+        diag.Set("CorrelationId", corr);
+        diag.Set("ClientIP", http.Connection.RemoteIpAddress?.ToString());
+        diag.Set("QueryString", http.Request.QueryString.HasValue ? http.Request.QueryString.Value : "");
+        diag.Set("UserAgent", http.Request.Headers.UserAgent.ToString());
+    };
+});
+
 app.UseSwagger();
 app.UseSwaggerUI();
-app.UseSerilogRequestLogging();
+
+// --- Endpoints ---
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
@@ -152,6 +186,7 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
 .WithName("GetTelemetry")
 .Produces(StatusCodes.Status200OK);
 
+// --- Arranque y Migraciones ---
 try
 {
     if (!app.Environment.IsEnvironment("Testing"))
