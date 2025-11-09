@@ -2,36 +2,41 @@ name: ci-cd
 
 on:
   push:
-    branches: ["main"]
-    tags: ["v*.*.*"]
+    branches: [ "main" ]
+    tags:     [ "v*.*.*" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/telemetry-api
   DOTNET_VERSION: "8.0.x"
-  # repo en minúsculas (owner/repo)
-  GH_REPO_SLUG: ${{ toLower(github.repository) }}
-  IMAGE_NAME: ghcr.io/${{ toLower(github.repository) }}
 
 jobs:
   lint_test_build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
       - name: Restore
         run: dotnet restore ./backend/Telemetry.Api
+
       - name: Format (check)
         run: dotnet format ./backend/Telemetry.Api --verify-no-changes || true
+
       - name: Test
-        run: dotnet test ./tests/Telemetry.Api.Tests --verbosity normal || true
+        run: dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
+
       - name: Build
         run: dotnet build ./backend/Telemetry.Api -c Release --no-restore
 
   docker_publish:
+    # Publica SOLO en push (no en PR) y cuando el repo es el principal
+    if: ${{ github.event_name == 'push' }}
     needs: lint_test_build
     runs-on: ubuntu-latest
     permissions:
@@ -67,6 +72,3 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
             ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.sha }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ env.GH_REPO_SLUG }}
-            org.opencontainers.image.revision=${{ github.sha }}

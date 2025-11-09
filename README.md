@@ -1,47 +1,155 @@
-# Telemetry API — .NET 8 + Oracle (EF Core) + AWS Fargate Ready
 
-## Objetivo
-Servicio de ingesta/consulta de telemetría listo para producción mínima: batch POST, GET con filtros/paginación, índices adecuados, logging estructurado y CI/CD con imágenes versionadas.
+# 🛰️ Telemetry API — .NET 8 + Oracle EF Core + AWS Fargate
 
-## Arquitectura
+**Goal:** Provide a production-ready telemetry ingestion and query API with a lightweight, containerized architecture.
+
+---
+
+## 🚀 Stack
+
+| Layer | Technology | Description |
+|-------|-------------|-------------|
+| Backend | ASP.NET Core Minimal API (.NET 8), EF Core (Oracle), FluentValidation | REST API for ingesting/querying telemetry events |
+| Database | Oracle XE 21c | Stores time-series telemetry data |
+| DevOps | Docker, ECS Fargate, GitHub Actions, GHCR | CI/CD pipeline with semantic tagging and deploy gating |
+
+---
+
+## ⚙️ Run Locally
+
+### Backend
+```bash
+docker compose up --build
+# → API available at http://localhost:5080
+```
+
+### Health Checks
+```bash
+curl http://localhost:5080/health
+curl http://localhost:5080/health/db
+```
+
+### Sample Query
+```bash
+curl "http://localhost:5080/api/telemetry?source=Tractor-001&page=1&pageSize=10"
+```
+
+---
+
+## 📡 API Endpoints
+
+| Method | Endpoint | Description |
+|---------|-----------|-------------|
+| `GET` | `/health` | Service heartbeat |
+| `GET` | `/health/db` | Database connectivity check |
+| `POST` | `/api/telemetry` | Batch ingestion of telemetry events |
+| `GET` | `/api/telemetry?source=&startDate=&endDate=&page=&pageSize=` | Filtered and paginated query |
+
+### Example Payload
+```json
+{
+  "events": [
+    { "timestamp": "2025-11-08T08:00:00Z", "source": "Tractor-001", "metricName": "EngineRPM", "metricValue": 1900 },
+    { "timestamp": "2025-11-08T08:01:00Z", "source": "Tractor-001", "metricName": "FuelRate", "metricValue": 2.6 }
+  ]
+}
+```
+
+---
+
+## 🧩 Architecture
+
 ```mermaid
 flowchart LR
-  iot[Dispositivo/Cliente] -->|HTTPS batch JSON| api[Telemetry API (ECS Fargate)]
-  api -->|ADO.NET/EF Core| db[(Oracle DB)]
-  api -. logs JSON .-> cw[(CloudWatch Logs)]
+  iot[Client / IoT Device] -->|HTTPS batch JSON| api[Telemetry API (.NET 8)]
+  api -->|EF Core / Oracle.ManagedDataAccess| db[(Oracle XE DB)]
+  api -. Logs JSON .-> cw[(CloudWatch / Serilog Console Sink)]
 ```
 
-## Modelo e Índices
-Entidad principal: `TelemetryEvent(Id, Timestamp, Source, MetricName, MetricValue)`.
-Índice compuesto **(Source, Timestamp)** para acelerar `WHERE Source = ? AND Timestamp BETWEEN ? AND ?`.
+---
 
-## Endpoints
-- `POST /api/telemetry` — Ingresa **batch** de eventos (array).
-- `GET /api/telemetry?source=&startDate=&endDate=&page=&pageSize=` — Consulta paginada y filtrada.
+## 🧠 Design Decisions
 
-## Observabilidad
-Logs JSON a consola → CloudWatch (driver `awslogs` en Fargate).
+- Minimal API for low boilerplate and easy testability.  
+- FluentValidation ensures reliable schema validation for ingestion.  
+- Serilog JSON structured logging → integrates with CloudWatch Insights.  
+- Docker Compose enables local parity with ECS Fargate environment.  
+- GHCR + GitHub Actions handle versioned image publishing.  
+- Index `(Source, Timestamp)` accelerates range queries for time-series data.  
 
-**CloudWatch Logs Insights (ejemplo):**
+---
+
+## 🧱 Database Schema
+
+```sql
+CREATE TABLE TelemetryEvent (
+  Id RAW(16) PRIMARY KEY,
+  Timestamp TIMESTAMP NOT NULL,
+  Source NVARCHAR2(100) NOT NULL,
+  MetricName NVARCHAR2(100) NOT NULL,
+  MetricValue FLOAT
+);
+
+CREATE INDEX IX_Telemetry_Source_Timestamp
+  ON TelemetryEvent(Source, Timestamp);
 ```
-fields @timestamp, Source, MetricName, MetricValue
-| filter MetricName = "EngineRPM" and Source = "Tractor-SN12345"
-| sort @timestamp desc
-| limit 50
+
+---
+
+## 🧪 Tests
+
+| Suite | Framework | Purpose |
+|--------|------------|----------|
+| Backend | xUnit | Validates API endpoints (POST/GET) |
+| Validation | FluentValidation | Ensures payload schema integrity |
+| CI | GitHub Actions | Runs on every PR and push |
+
+To run manually:
+```bash
+dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 ```
 
-## CI/CD
-GitHub Actions: formato → tests → build → Docker a GHCR.
-Tags: `vX.Y.Z` (si hay tag) y `SHA` corto (para trazabilidad).
+---
 
-## Despliegue (AWS Fargate)
-Usar `/deploy/aws-fargate/task-definition.json` + `iam-policy.json`.
-Variables: `<AWS_REGION>`, `<ACCOUNT_ID>`, `<ECR_OR_GHCR_IMAGE_TAG>`, `<ORACLE_CONNSTRING>`.
+## 🧰 CI/CD Pipeline
 
-## Plan de Rollback (crítico)
-1. Identificar imagen estable previa en GHCR/ECR (ej: `v1.2.2-f9e8d7c`).
-2. Editar el servicio ECS para apuntar a ese tag:
+**Workflows:**
+1. **ci-cd.yml** → restore, lint, test, build, push to GHCR  
+2. **deploy-ecs.yml** → optional AWS ECS deploy (runs only if tag + AWS secrets exist)
+
+**Tagging logic:**
+- Commits → `v0.0.0-<sha>`  
+- Releases → `vX.Y.Z`  
+
+---
+
+## 🩹 Rollback Plan (Preview)
+
+1. Keep multiple image versions in GHCR for instant tag rollback.  
+2. ECS policy → `minimumHealthyPercent = 100`, `maximumPercent = 200`.  
+3. Manual rollback via AWS CLI:  
    ```bash
-   aws ecs update-service --cluster <CLUSTER> --service telemetry-api      --force-new-deployment --task-definition telemetry-api
+   aws ecs update-service      --cluster <CLUSTER>      --service <SERVICE>      --force-new-deployment      --task-definition <PREVIOUS_TASK_DEF_ARN>
    ```
-3. Verificar salud y logs en CloudWatch.
+
+---
+
+## 🧭 Scalability
+
+- Stateless API, horizontally scalable (ECS tasks or pods).  
+- Oracle XE can migrate to RDS Oracle Standard easily.  
+- JSON logs easily aggregated by CloudWatch Insights.  
+- Designed for lightweight edge and cloud deployments.
+
+---
+
+## 🧾 CI Status
+
+✅ Lint / Test / Build  
+🕒 Deploy (skipped if no AWS credentials)
+
+---
+
+## 🪪 License
+
+MIT — 2025 © Francisco Cordero Aguero

@@ -3,9 +3,7 @@ name: deploy-ecs
 on:
   workflow_dispatch:
   push:
-    # Mantenemos el trigger en 'main' para validaciones, pero el job de deploy no se ejecutará.
-    branches: [ "main" ] 
-    # Añadimos el trigger para tags que sigan el patrón v*.*.*
+    branches: [ "main" ]
     tags: [ "v*.*.*" ]
     paths:
       - "backend/Telemetry.Api/**"
@@ -18,9 +16,11 @@ env:
 
 jobs:
   deploy:
-    # Esta es la condición clave: el job solo se ejecuta si el evento es un tag.
-    # Los pushes a 'main' activarán el workflow, pero este job será omitido.
-    if: github.ref_type == 'tag'
+    if: >-
+      github.ref_type == 'tag' &&
+      secrets.AWS_ROLE_ARN != '' &&
+      secrets.AWS_ACCOUNT_ID != '' &&
+      secrets.AWS_REGION != ''
     runs-on: ubuntu-latest
     permissions:
       id-token: write
