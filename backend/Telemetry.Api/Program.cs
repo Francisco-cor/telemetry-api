@@ -150,7 +150,7 @@ try
         dbCtx.Database.Migrate();
         Log.Information("Las migraciones de EF Core se han completado exitosamente.");
     }
-    
+
     Log.Information("Iniciando la aplicación Telemetry API");
     app.Run();
 }
