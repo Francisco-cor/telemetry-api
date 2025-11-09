@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Telemetry.Api.Infra;
 
-public class TelemetryApiFactory : WebApplicationFactory<Program>
+internal class TelemetryApiFactory : WebApplicationFactory<Program>
 {
     private SqliteConnection? _conn;
 
