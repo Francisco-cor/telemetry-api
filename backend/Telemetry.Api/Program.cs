@@ -1,6 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi.Models;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using FluentValidation;
 using Serilog;
 using Serilog.Context;
@@ -26,12 +30,16 @@ builder.Host.UseSerilog();
 
 builder.Services.AddEndpointsApiExplorer();
 
-// Ajuste en Swagger para visibilidad del header de correlación
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "Telemetry API", Version = "v1" });
     c.OperationFilter<AddCorrelationHeaderOperationFilter>();
 });
+
+// Health checks: 'live' (self) y 'ready' (DB)
+builder.Services.AddHealthChecks()
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })
+    .AddCheck<TelemDbReadyCheck>("db", tags: new[] { "ready" });
 
 // --- conexión ---
 var conn =
@@ -44,37 +52,50 @@ if (string.IsNullOrWhiteSpace(conn) && !builder.Environment.IsEnvironment("Testi
     throw new InvalidOperationException("Connection string 'Db'/'Oracle' is not configured.");
 }
 
-// Si estamos en Testing, el factory ya registrará el DbContext (SQLite). Aquí sólo Oracle para ambientes reales.
 if (!builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(conn!));
-}
-else
-{
-    // En Testing el DbContext se inyecta en el factory (SQLite). No hacer nada aquí.
 }
 
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
 
 var app = builder.Build();
 
+// --- Función para escribir la respuesta de Health Checks en formato JSON ---
+static Task WriteHealthJson(HttpContext ctx, HealthReport report)
+{
+    ctx.Response.ContentType = "application/json; charset=utf-8";
+
+    var payload = new
+    {
+        status = report.Status.ToString(),
+        checks = report.Entries.Select(e => new
+        {
+            name = e.Key,
+            status = e.Value.Status.ToString(),
+            durationMs = (int)e.Value.Duration.TotalMilliseconds,
+            error = e.Value.Exception?.Message
+        })
+    };
+
+    var options = new JsonSerializerOptions
+    {
+        WriteIndented = true, // Para mejor legibilidad
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    return ctx.Response.WriteAsync(JsonSerializer.Serialize(payload, options));
+}
+
+
 // --- Pipeline de Middleware ---
-
-// Correlation Id primero en la cadena
 app.UseCorrelationId();
-
-// Serilog Request Logging enriquecido
 app.UseSerilogRequestLogging(opts =>
 {
-    // Mensaje compacto por request
     opts.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0} ms (corrId: {CorrelationId})";
-
-    // Enriquecer el contexto con datos útiles
     opts.EnrichDiagnosticContext = (diag, http) =>
     {
-        var corr = http.Request.Headers[CorrelationIdMiddleware.HeaderName].ToString() ??
-                   http.TraceIdentifier;
-
+        var corr = http.Request.Headers[CorrelationIdMiddleware.HeaderName].ToString() ?? http.TraceIdentifier;
         diag.Set("CorrelationId", corr);
         diag.Set("ClientIP", http.Connection.RemoteIpAddress?.ToString());
         diag.Set("QueryString", http.Request.QueryString.HasValue ? http.Request.QueryString.Value : "");
@@ -87,20 +108,17 @@ app.UseSwaggerUI();
 
 // --- Endpoints ---
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-
-app.MapGet("/health/db", async (TelemDb db) =>
+// --- Health endpoints ---
+app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
-    try
-    {
-        await db.Database.ExecuteSqlRawAsync("SELECT 1 FROM DUAL");
-        return Results.Ok(new { db = "ok" });
-    }
-    catch (Exception ex)
-    {
-        Log.Error(ex, "El health check de la base de datos ha fallado.");
-        return Results.Problem(title: "DB check failed", detail: "Database is not reachable.", statusCode: 500);
-    }
+    Predicate = r => r.Tags.Contains("live"),
+    ResponseWriter = WriteHealthJson
+});
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = r => r.Tags.Contains("ready"),
+    ResponseWriter = WriteHealthJson
 });
 
 // ---------- POST /api/telemetry ----------
@@ -122,7 +140,6 @@ app.MapPost("/api/telemetry", async (
             };
             return Results.BadRequest(details);
         }
-
         var events = batch.Events.Select(e => new TelemetryEvent
         {
             Id = Guid.NewGuid(),
@@ -131,10 +148,8 @@ app.MapPost("/api/telemetry", async (
             MetricName = e.MetricName,
             MetricValue = e.MetricValue
         }).ToList();
-
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
-
         return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
     }
     catch (Exception ex)
@@ -151,23 +166,17 @@ app.MapPost("/api/telemetry", async (
 .ProducesProblem(StatusCodes.Status400BadRequest)
 .ProducesProblem(StatusCodes.Status500InternalServerError);
 
-
 // ---------- GET /api/telemetry ----------
 app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
 {
     page = Math.Max(page, 1);
     pageSize = pageSize is < 1 or > 500 ? 100 : pageSize;
-
     var query = db.Telemetry.AsNoTracking();
-
     if (!string.IsNullOrWhiteSpace(source))
         query = query.Where(t => t.Source == source);
-
     if (startDate.HasValue && endDate.HasValue)
         query = query.Where(t => t.Timestamp >= startDate.Value && t.Timestamp <= endDate.Value);
-
     var totalCount = await query.CountAsync();
-
     var items = await query
         .OrderByDescending(t => t.Timestamp)
         .Skip((page - 1) * pageSize)
@@ -181,7 +190,6 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
             t.MetricValue
         })
         .ToListAsync();
-
     return Results.Ok(new { items, totalCount, page, pageSize });
 })
 .WithName("GetTelemetry")
@@ -198,7 +206,6 @@ try
         dbCtx.Database.Migrate();
         Log.Information("EF Core migrations applied.");
     }
-
     Log.Information("Starting Telemetry API");
     app.Run();
 }
