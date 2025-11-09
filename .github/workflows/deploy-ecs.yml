@@ -3,7 +3,10 @@ name: deploy-ecs
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    # Mantenemos el trigger en 'main' para validaciones, pero el job de deploy no se ejecutará.
+    branches: [ "main" ] 
+    # Añadimos el trigger para tags que sigan el patrón v*.*.*
+    tags: [ "v*.*.*" ]
     paths:
       - "backend/Telemetry.Api/**"
       - "deploy/**"
@@ -15,6 +18,9 @@ env:
 
 jobs:
   deploy:
+    # Esta es la condición clave: el job solo se ejecuta si el evento es un tag.
+    # Los pushes a 'main' activarán el workflow, pero este job será omitido.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -23,23 +29,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Si tu imagen en GHCR es PRIVADA y la usará ECS, necesitas ECR o credenciales de registro en el Task Execution Role.
-      # Aquí solo construimos tags útiles para info/log.
       - name: Compute tags
         id: meta
         run: |
           SHA_TAG=${GITHUB_SHA::7}
           echo "sha=${SHA_TAG}" >> $GITHUB_OUTPUT
 
-      # Autenticación OIDC a AWS (recomendado) o usa claves si aún no configuras OIDC.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-      # (Opcional) Si también quieres build & push desde aquí a GHCR, puedes repetir el paso del pipeline de CI.
-      # Normalmente CI ya empujó la imagen, aquí solo actualizamos la tarea/servicio.
       - name: Render task definition
         id: render
         run: |

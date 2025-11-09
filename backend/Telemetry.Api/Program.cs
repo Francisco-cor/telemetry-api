@@ -57,36 +57,53 @@ app.MapGet("/health/db", async (TelemDb db) =>
 });
 
 // ---------- POST /api/telemetry ----------
-app.MapPost("/api/telemetry", async (TelemDb db, IValidator<TelemetryIngestBatch> validator, TelemetryIngestBatch batch) =>
+app.MapPost("/api/telemetry", async (
+    TelemDb db,
+    IValidator<TelemetryIngestBatch> validator,
+    [FromBody] TelemetryIngestBatch batch
+) =>
 {
-    var validation = await validator.ValidateAsync(batch);
-    if (!validation.IsValid)
+    try
     {
-        var details = new ProblemDetails
+        var validation = await validator.ValidateAsync(batch);
+        if (!validation.IsValid)
         {
-            Title = "Invalid payload",
-            Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"))
-        };
-        return Results.BadRequest(details);
+            var details = new ProblemDetails
+            {
+                Title = "Invalid payload",
+                Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}"))
+            };
+            return Results.BadRequest(details);
+        }
+
+        var events = batch.Events.Select(e => new TelemetryEvent
+        {
+            Id = Guid.NewGuid(),
+            Timestamp = e.Timestamp,
+            Source = e.Source,
+            MetricName = e.MetricName,
+            MetricValue = e.MetricValue
+        }).ToList();
+
+        await db.Telemetry.AddRangeAsync(events);
+        await db.SaveChangesAsync();
+
+        return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
     }
-
-    var events = batch.Events.Select(e => new TelemetryEvent
+    catch (Exception ex)
     {
-        Id = Guid.NewGuid(),
-        Timestamp = e.Timestamp,
-        Source = e.Source,
-        MetricName = e.MetricName,
-        MetricValue = e.MetricValue
-    }).ToList();
-
-    await db.Telemetry.AddRangeAsync(events);
-    await db.SaveChangesAsync();
-
-    return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
+        Log.Error(ex, "Failed to ingest telemetry batch.");
+        return Results.Problem(
+            title: "Ingestion failed",
+            detail: ex.Message,
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
 })
 .WithName("PostTelemetry")
 .Produces(StatusCodes.Status201Created)
-.ProducesProblem(StatusCodes.Status400BadRequest);
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status500InternalServerError);
+
 
 // ---------- GET /api/telemetry ----------
 app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
@@ -125,12 +142,21 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
 
 try
 {
+    // Aplica migraciones de EF Core automáticamente al iniciar
+    Log.Information("Intentando aplicar migraciones de EF Core...");
+    using (var scope = app.Services.CreateScope())
+    {
+        var dbCtx = scope.ServiceProvider.GetRequiredService<TelemDb>();
+        dbCtx.Database.Migrate();
+        Log.Information("Las migraciones de EF Core se han completado exitosamente.");
+    }
+    
     Log.Information("Iniciando la aplicación Telemetry API");
     app.Run();
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "La aplicación ha fallado al iniciar.");
+    Log.Fatal(ex, "La aplicación ha fallado al iniciar o durante la migración.");
 }
 finally
 {
