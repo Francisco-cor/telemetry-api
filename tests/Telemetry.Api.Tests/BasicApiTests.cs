@@ -6,7 +6,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
-public class BasicApiTests : IClassFixture<TelemetryApiFactory>
+internal class BasicApiTests : IClassFixture<TelemetryApiFactory>
 {
     private readonly HttpClient _client;
 
