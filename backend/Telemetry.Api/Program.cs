@@ -23,14 +23,26 @@ builder.Host.UseSerilog();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Verificación explícita de la cadena de conexión
-var connectionString = builder.Configuration.GetConnectionString("Db");
-if (string.IsNullOrWhiteSpace(connectionString))
+// --- conexión ---
+var conn =
+    builder.Configuration.GetConnectionString("Db")
+    ?? builder.Configuration.GetConnectionString("Oracle");
+
+if (string.IsNullOrWhiteSpace(conn) && !builder.Environment.IsEnvironment("Testing"))
 {
-    Log.Fatal("La cadena de conexión 'Db' no se ha encontrado. Revisa las variables de entorno en docker-compose.yml.");
-    throw new InvalidOperationException("Connection string 'Db' is not configured.");
+    Log.Fatal("No connection string 'Db'/'Oracle' found.");
+    throw new InvalidOperationException("Connection string 'Db'/'Oracle' is not configured.");
 }
-builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(connectionString));
+
+// Si estamos en Testing, el factory ya registrará el DbContext (SQLite). Aquí sólo Oracle para ambientes reales.
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(conn!));
+}
+else
+{
+    // En Testing el DbContext se inyecta en el factory (SQLite). No hacer nada aquí.
+}
 
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
 
@@ -142,21 +154,21 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
 
 try
 {
-    // Aplica migraciones de EF Core automáticamente al iniciar
-    Log.Information("Intentando aplicar migraciones de EF Core...");
-    using (var scope = app.Services.CreateScope())
+    if (!app.Environment.IsEnvironment("Testing"))
     {
+        Log.Information("Applying EF Core migrations...");
+        using var scope = app.Services.CreateScope();
         var dbCtx = scope.ServiceProvider.GetRequiredService<TelemDb>();
         dbCtx.Database.Migrate();
-        Log.Information("Las migraciones de EF Core se han completado exitosamente.");
+        Log.Information("EF Core migrations applied.");
     }
 
-    Log.Information("Iniciando la aplicación Telemetry API");
+    Log.Information("Starting Telemetry API");
     app.Run();
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "La aplicación ha fallado al iniciar o durante la migración.");
+    Log.Fatal(ex, "Startup or migration failed.");
 }
 finally
 {
