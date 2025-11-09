@@ -14,6 +14,10 @@
     </PackageReference>
     <PackageReference Include="Oracle.EntityFrameworkCore" Version="8.21.140" />
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.1" />
+    
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="2.3.0" />
+    <PackageReference Include="Serilog.Enrichers.Thread" Version="3.1.0" />
+    
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.4.0" />
   </ItemGroup>
 
@@ -21,4 +25,4 @@
     <InternalsVisibleTo Include="Telemetry.Api.Tests" />
   </ItemGroup>
 
-</Project>
+</Project>```
