@@ -1,10 +1,10 @@
-# 🛰️ Telemetry API — .NET 8 + Oracle EF Core + AWS Fargate
+# Telemetry API — .NET 8 + Oracle EF Core + AWS Fargate
 
 **Goal:** Provide a production-ready telemetry ingestion and query API with a lightweight, containerized architecture.
 
 ---
 
-## 🚀 Stack
+## Stack
 
 | Layer | Technology | Description |
 |-------|-------------|-------------|
@@ -14,7 +14,7 @@
 
 ---
 
-## ⚙️ Run Locally
+## Run Locally
 
 ### Backend
 ```bash
@@ -35,7 +35,7 @@ curl "http://localhost:5080/api/telemetry?source=Tractor-001&page=1&pageSize=10"
 
 ---
 
-## 📡 API Endpoints
+## API Endpoints
 
 | Method | Endpoint | Description |
 |---------|-----------|-------------|
@@ -56,7 +56,7 @@ curl "http://localhost:5080/api/telemetry?source=Tractor-001&page=1&pageSize=10"
 
 ---
 
-## 🧩 Architecture
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -67,7 +67,7 @@ flowchart LR
 
 ---
 
-## 🧠 Design Decisions
+## Design Decisions
 
 - Minimal API for low boilerplate and easy testability.  
 - FluentValidation ensures reliable schema validation for ingestion.  
@@ -78,7 +78,7 @@ flowchart LR
 
 ---
 
-## 🧱 Database Schema
+## Database Schema
 
 ```sql
 CREATE TABLE TelemetryEvent (
@@ -95,7 +95,7 @@ CREATE INDEX IX_Telemetry_Source_Timestamp
 
 ---
 
-## 🧪 Tests
+## Tests
 
 | Suite | Framework | Purpose |
 |--------|------------|----------|
@@ -110,7 +110,7 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 
 ---
 
-## 🧰 CI/CD Pipeline
+## CI/CD Pipeline
 
 **Workflows:**
 1. **ci-cd.yml** → restore, lint, test, build, push to GHCR  
@@ -122,7 +122,7 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 
 ---
 
-## 🩹 Rollback Plan (Preview)
+## Rollback Plan (Preview)
 
 1. Keep multiple image versions in GHCR for instant tag rollback.  
 2. ECS policy → `minimumHealthyPercent = 100`, `maximumPercent = 200`.  
@@ -133,7 +133,7 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 
 ---
 
-## 🧭 Scalability
+## Scalability
 
 - Stateless API, horizontally scalable (ECS tasks or pods).  
 - Oracle XE can migrate to RDS Oracle Standard easily.  
@@ -142,25 +142,25 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 
 ---
 
-## 🧾 CI Status
+## CI Status
 
 ✅ Lint / Test / Build  
 🕒 Deploy (skipped if no AWS credentials)
 
 ---
 
-## 🪪 License
+## License
 
 MIT — 2025 © Francisco Cordero Aguero
 
 ---
 
-## 🧪 Testing Strategy
+## Testing Strategy
 
 Integration tests (xUnit + WebApplicationFactory + SQLite in-memory) run automatically on CI to validate all endpoints:
 - ✅ **POST /api/telemetry** → 201 Created, batch insert validated
 - ✅ **GET /api/telemetry** → 200 OK, pagination and filters
-- 🧱 **/health/live** and **/health/ready** verify DB connectivity and readiness
+- ✅ **/health/live** and **/health/ready** verify DB connectivity and readiness
 
 Local run:
 ```bash
@@ -169,7 +169,7 @@ dotnet test ./tests/Telemetry.Api.Tests --verbosity normal
 
 ---
 
-## ⚡ Quickstart Summary
+## Quickstart Summary
 
 ```bash
 # 1. Build & run locally
