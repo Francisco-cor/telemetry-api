@@ -9,7 +9,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentValidation;
 using Serilog;
-using Serilog.Context;
 using Serilog.Formatting.Compact;
 using Telemetry.Api.Infra;
 using Telemetry.Api.Domain;
@@ -17,10 +16,11 @@ using Telemetry.Api.Api;
 using Telemetry.Api.Middleware;
 using Telemetry.Api.Swagger;
 using Telemetry.Api.Health;
+using Telemetry.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Serilog mínimo y robusto, sin depender de appsettings.json
+// Serilog mínimo y robusto
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .Enrich.FromLogContext()
@@ -32,12 +32,11 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 builder.Services.AddEndpointsApiExplorer();
-
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new() { Title = "Telemetry API", Version = "v1" });
     c.OperationFilter<AddCorrelationHeaderOperationFilter>();
-    c.OperationFilter<AddTooManyRequestsResponseOperationFilter>(); // ← nuevo
+    c.OperationFilter<AddTooManyRequestsResponseOperationFilter>();
 });
 
 builder.Services.AddHealthChecks()
@@ -48,6 +47,7 @@ builder.Services.AddRateLimiter(options =>
 {
     options.AddPolicy("fixed-per-ip", httpContext =>
     {
+        // TODO: Use ForwardedHeaders for real IP behind proxies
         var key = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: key,
@@ -78,7 +78,7 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
-// --- conexión ---
+// --- Services & DB ---
 var conn = builder.Configuration.GetConnectionString("Db") ?? builder.Configuration.GetConnectionString("Oracle");
 if (string.IsNullOrWhiteSpace(conn) && !builder.Environment.IsEnvironment("Testing"))
 {
@@ -89,7 +89,11 @@ if (!builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddDbContext<TelemDb>(opts => opts.UseOracle(conn!));
 }
+
 builder.Services.AddScoped<IValidator<TelemetryIngestBatch>, TelemetryBatchValidator>();
+builder.Services.AddScoped<ITelemetryService, TelemetryService>();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails(); // Required for IExceptionHandler
 
 var app = builder.Build();
 
@@ -111,7 +115,8 @@ static Task WriteHealthJson(HttpContext ctx, HealthReport report)
     return ctx.Response.WriteAsync(JsonSerializer.Serialize(payload, options));
 }
 
-// --- Pipeline de Middleware ---
+// --- Pipeline ---
+app.UseExceptionHandler(); // Global Exception Handler
 app.UseCorrelationId();
 app.UseSerilogRequestLogging(opts =>
 {
@@ -133,64 +138,9 @@ app.UseSwaggerUI();
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live"), ResponseWriter = WriteHealthJson });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready"), ResponseWriter = WriteHealthJson });
 
-// ---------- POST /api/telemetry ----------
-app.MapPost("/api/telemetry", async (
-    TelemDb db,
-    IValidator<TelemetryIngestBatch> validator,
-    [FromBody] TelemetryIngestBatch batch
-) =>
-{
-    try
-    {
-        var validation = await validator.ValidateAsync(batch);
-        if (!validation.IsValid)
-        {
-            var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
-            return Results.BadRequest(details);
-        }
-        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.NewGuid(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue }).ToList();
-        await db.Telemetry.AddRangeAsync(events);
-        await db.SaveChangesAsync();
-        return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
-    }
-    catch (Exception ex)
-    {
-        Log.Error(ex, "Failed to ingest telemetry batch.");
-        return Results.Problem(title: "Ingestion failed", detail: ex.Message, statusCode: StatusCodes.Status500InternalServerError);
-    }
-})
-.WithName("PostTelemetry")
-.WithMetadata(new RequestSizeLimitAttribute(256 * 1024))
-.RequireRateLimiting("fixed-per-ip")
-.Produces(StatusCodes.Status201Created)
-.ProducesProblem(StatusCodes.Status400BadRequest)
-.ProducesProblem(StatusCodes.Status500InternalServerError);
+app.MapTelemetryEndpoints();
 
-
-// ---------- GET /api/telemetry ----------
-app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
-{
-    page = Math.Max(page, 1);
-    pageSize = pageSize is < 1 or > 500 ? 100 : pageSize;
-    var query = db.Telemetry.AsNoTracking();
-    if (!string.IsNullOrWhiteSpace(source))
-        query = query.Where(t => t.Source == source);
-    if (startDate.HasValue && endDate.HasValue)
-        query = query.Where(t => t.Timestamp >= startDate.Value && t.Timestamp <= endDate.Value);
-    var totalCount = await query.CountAsync();
-    var items = await query
-        .OrderByDescending(t => t.Timestamp)
-        .Skip((page - 1) * pageSize)
-        .Take(pageSize)
-        .Select(t => new { t.Id, t.Timestamp, t.Source, t.MetricName, t.MetricValue })
-        .ToListAsync();
-    return Results.Ok(new { items, totalCount, page, pageSize });
-})
-.WithName("GetTelemetry")
-.RequireRateLimiting("fixed-per-ip")
-.Produces(StatusCodes.Status200OK);
-
-// --- Arranque y Migraciones ---
+// --- Startup & Migrations ---
 try
 {
     if (!app.Environment.IsEnvironment("Testing"))
