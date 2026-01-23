@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+*.pdb
+.git/
+.vscode/
+.idea/
+out/
+appsettings.Development.json
+appsettings.json

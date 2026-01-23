@@ -20,13 +20,9 @@ using Telemetry.Api.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Serilog mínimo y robusto, sin depender de appsettings.json
+// Serilog cargado desde configuración
 Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .Enrich.FromLogContext()
-    .Enrich.WithMachineName()
-    .Enrich.WithThreadId()
-    .WriteTo.Console(new CompactJsonFormatter())
+    .ReadFrom.Configuration(builder.Configuration)
     .CreateBootstrapLogger();
 
 builder.Host.UseSerilog();
@@ -46,15 +42,20 @@ builder.Services.AddHealthChecks()
 
 builder.Services.AddRateLimiter(options =>
 {
+    var permitLimit = builder.Configuration.GetValue<int>("RateLimiting:PermitLimit", 100);
+    var windowMinutes = builder.Configuration.GetValue<int>("RateLimiting:WindowMinutes", 5);
+
     options.AddPolicy("fixed-per-ip", httpContext =>
     {
-        var key = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var key = httpContext.Connection.RemoteIpAddress?.GetAddressBytes() is { } bytes 
+            ? Convert.ToBase64String(bytes) 
+            : "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: key,
             factory: _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 100,
-                Window = TimeSpan.FromMinutes(5),
+                PermitLimit = permitLimit,
+                Window = TimeSpan.FromMinutes(windowMinutes),
                 QueueLimit = 0,
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst
             });
@@ -148,10 +149,11 @@ app.MapPost("/api/telemetry", async (
             var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
             return Results.BadRequest(details);
         }
-        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.NewGuid(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue }).ToList();
+        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.CreateVersion7(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue });
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
-        return Results.Created($"/api/telemetry?inserted={events.Count}", new { inserted = events.Count });
+        var count = batch.Events.Count;
+        return Results.Created($"/api/telemetry?inserted={count}", new { inserted = count });
     }
     catch (Exception ex)
     {
@@ -177,14 +179,17 @@ app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startD
         query = query.Where(t => t.Source == source);
     if (startDate.HasValue && endDate.HasValue)
         query = query.Where(t => t.Timestamp >= startDate.Value && t.Timestamp <= endDate.Value);
-    var totalCount = await query.CountAsync();
     var items = await query
         .OrderByDescending(t => t.Timestamp)
         .Skip((page - 1) * pageSize)
-        .Take(pageSize)
+        .Take(pageSize + 1) // Fetch one extra to determine HasNext
         .Select(t => new { t.Id, t.Timestamp, t.Source, t.MetricName, t.MetricValue })
         .ToListAsync();
-    return Results.Ok(new { items, totalCount, page, pageSize });
+
+    var hasNext = items.Count > pageSize;
+    if (hasNext) items.RemoveAt(pageSize);
+
+    return Results.Ok(new { items, hasNext, page, pageSize });
 })
 .WithName("GetTelemetry")
 .RequireRateLimiting("fixed-per-ip")
