@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+
 using Telemetry.Api.Infra;
 
 namespace Telemetry.Api.Health;

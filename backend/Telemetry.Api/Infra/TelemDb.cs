@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+
 using Telemetry.Api.Domain;
 
 namespace Telemetry.Api.Infra;

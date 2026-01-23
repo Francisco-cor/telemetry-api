@@ -1,5 +1,7 @@
 using Microsoft.OpenApi.Models;
+
 using Swashbuckle.AspNetCore.SwaggerGen;
+
 using Telemetry.Api.Middleware;
 
 namespace Telemetry.Api.Swagger;

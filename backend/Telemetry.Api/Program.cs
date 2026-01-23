@@ -1,22 +1,26 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.OpenApi.Models;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.RateLimiting;
-using System.Threading.RateLimiting;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+
 using FluentValidation;
+
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.OpenApi.Models;
+
 using Serilog;
 using Serilog.Context;
 using Serilog.Formatting.Compact;
-using Telemetry.Api.Infra;
-using Telemetry.Api.Domain;
+
 using Telemetry.Api.Api;
+using Telemetry.Api.Domain;
+using Telemetry.Api.Health;
+using Telemetry.Api.Infra;
 using Telemetry.Api.Middleware;
 using Telemetry.Api.Swagger;
-using Telemetry.Api.Health;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,8 +51,8 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("fixed-per-ip", httpContext =>
     {
-        var key = httpContext.Connection.RemoteIpAddress?.GetAddressBytes() is { } bytes 
-            ? Convert.ToBase64String(bytes) 
+        var key = httpContext.Connection.RemoteIpAddress?.GetAddressBytes() is { } bytes
+            ? Convert.ToBase64String(bytes)
             : "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: key,
@@ -149,7 +153,7 @@ app.MapPost("/api/telemetry", async (
             var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
             return Results.BadRequest(details);
         }
-        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.CreateVersion7(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue });
+        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.NewGuid(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue });
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
         var count = batch.Events.Count;
