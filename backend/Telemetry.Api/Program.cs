@@ -153,7 +153,15 @@ app.MapPost("/api/telemetry", async (
             var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
             return Results.BadRequest(details);
         }
-        var events = batch.Events.Select(e => new TelemetryEvent { Id = Guid.NewGuid(), Timestamp = e.Timestamp, Source = e.Source, MetricName = e.MetricName, MetricValue = e.MetricValue });
+        // Usar GUIDs secuenciales para evitar fragmentación
+        var events = batch.Events.Select(e => new TelemetryEvent 
+        { 
+            Id = SequentialGuidGenerator.Create(), 
+            Timestamp = e.Timestamp, 
+            Source = e.Source, 
+            MetricName = e.MetricName, 
+            MetricValue = e.MetricValue 
+        });
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
         var count = batch.Events.Count;
@@ -174,26 +182,50 @@ app.MapPost("/api/telemetry", async (
 
 
 // ---------- GET /api/telemetry ----------
-app.MapGet("/api/telemetry", async (TelemDb db, string? source, DateTime? startDate, DateTime? endDate, int page = 1, int pageSize = 100) =>
+app.MapGet("/api/telemetry", async (
+    TelemDb db, 
+    string? source, 
+    DateTime? startDate, 
+    DateTime? endDate, 
+    DateTime? afterTimestamp, 
+    Guid? afterId, 
+    int pageSize = 100
+) =>
 {
-    page = Math.Max(page, 1);
     pageSize = pageSize is < 1 or > 500 ? 100 : pageSize;
     var query = db.Telemetry.AsNoTracking();
+    
     if (!string.IsNullOrWhiteSpace(source))
         query = query.Where(t => t.Source == source);
-    if (startDate.HasValue && endDate.HasValue)
-        query = query.Where(t => t.Timestamp >= startDate.Value && t.Timestamp <= endDate.Value);
+    
+    if (startDate.HasValue)
+        query = query.Where(t => t.Timestamp >= startDate.Value);
+    
+    if (endDate.HasValue)
+        query = query.Where(t => t.Timestamp <= endDate.Value);
+
+    // Keyset pagination (afterTimestamp + afterId para desempate)
+    if (afterTimestamp.HasValue && afterId.HasValue)
+    {
+        query = query.Where(t => t.Timestamp < afterTimestamp.Value || 
+                               (t.Timestamp == afterTimestamp.Value && t.Id.CompareTo(afterId.Value) < 0));
+    }
+
     var items = await query
         .OrderByDescending(t => t.Timestamp)
-        .Skip((page - 1) * pageSize)
-        .Take(pageSize + 1) // Fetch one extra to determine HasNext
+        .ThenByDescending(t => t.Id)
+        .Take(pageSize + 1)
         .Select(t => new { t.Id, t.Timestamp, t.Source, t.MetricName, t.MetricValue })
         .ToListAsync();
 
     var hasNext = items.Count > pageSize;
     if (hasNext) items.RemoveAt(pageSize);
 
-    return Results.Ok(new { items, hasNext, page, pageSize });
+    var lastItem = items.LastOrDefault();
+    var nextTimestamp = lastItem?.Timestamp;
+    var nextId = lastItem?.Id;
+
+    return Results.Ok(new { items, hasNext, nextTimestamp, nextId, pageSize });
 })
 .WithName("GetTelemetry")
 .RequireRateLimiting("fixed-per-ip")
@@ -222,4 +254,28 @@ finally
     Log.CloseAndFlush();
 }
 
+
 public partial class Program { }
+
+public static class SequentialGuidGenerator
+{
+    public static Guid Create()
+    {
+        var guidBytes = Guid.NewGuid().ToByteArray();
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var timestampBytes = BitConverter.GetBytes(timestamp);
+
+        if (BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(timestampBytes);
+        }
+
+        var result = new byte[16];
+        // Copiar 6 bytes del timestamp (suficiente para ~8000 años)
+        Buffer.BlockCopy(timestampBytes, 2, result, 0, 6);
+        // Copiar los otros 10 bytes de aleatoriedad
+        Buffer.BlockCopy(guidBytes, 6, result, 6, 10);
+
+        return new Guid(result);
+    }
+}

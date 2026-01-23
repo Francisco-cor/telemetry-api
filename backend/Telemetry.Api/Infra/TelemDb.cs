@@ -19,5 +19,7 @@ public class TelemDb : DbContext
         entity.Property(e => e.MetricName).HasMaxLength(100).IsRequired();
         entity.HasIndex(e => new { e.Source, e.Timestamp })
               .HasDatabaseName("IX_Telemetry_Source_Timestamp");
+        entity.HasIndex(e => e.Timestamp)
+              .HasDatabaseName("IX_Telemetry_Timestamp");
     }
 }
