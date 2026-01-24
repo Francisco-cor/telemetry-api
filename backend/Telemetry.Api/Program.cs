@@ -154,13 +154,13 @@ app.MapPost("/api/telemetry", async (
             return Results.BadRequest(details);
         }
         // Usar GUIDs secuenciales para evitar fragmentación
-        var events = batch.Events.Select(e => new TelemetryEvent 
-        { 
-            Id = SequentialGuidGenerator.Create(), 
-            Timestamp = e.Timestamp, 
-            Source = e.Source, 
-            MetricName = e.MetricName, 
-            MetricValue = e.MetricValue 
+        var events = batch.Events.Select(e => new TelemetryEvent
+        {
+            Id = SequentialGuidGenerator.Create(),
+            Timestamp = e.Timestamp,
+            Source = e.Source,
+            MetricName = e.MetricName,
+            MetricValue = e.MetricValue
         });
         await db.Telemetry.AddRangeAsync(events);
         await db.SaveChangesAsync();
@@ -183,31 +183,31 @@ app.MapPost("/api/telemetry", async (
 
 // ---------- GET /api/telemetry ----------
 app.MapGet("/api/telemetry", async (
-    TelemDb db, 
-    string? source, 
-    DateTime? startDate, 
-    DateTime? endDate, 
-    DateTime? afterTimestamp, 
-    Guid? afterId, 
+    TelemDb db,
+    string? source,
+    DateTime? startDate,
+    DateTime? endDate,
+    DateTime? afterTimestamp,
+    Guid? afterId,
     int pageSize = 100
 ) =>
 {
     pageSize = pageSize is < 1 or > 500 ? 100 : pageSize;
     var query = db.Telemetry.AsNoTracking();
-    
+
     if (!string.IsNullOrWhiteSpace(source))
         query = query.Where(t => t.Source == source);
-    
+
     if (startDate.HasValue)
         query = query.Where(t => t.Timestamp >= startDate.Value);
-    
+
     if (endDate.HasValue)
         query = query.Where(t => t.Timestamp <= endDate.Value);
 
     // Keyset pagination (afterTimestamp + afterId para desempate)
     if (afterTimestamp.HasValue && afterId.HasValue)
     {
-        query = query.Where(t => t.Timestamp < afterTimestamp.Value || 
+        query = query.Where(t => t.Timestamp < afterTimestamp.Value ||
                                (t.Timestamp == afterTimestamp.Value && t.Id.CompareTo(afterId.Value) < 0));
     }
 
