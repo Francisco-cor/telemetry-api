@@ -51,9 +51,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("fixed-per-ip", httpContext =>
     {
-        var key = httpContext.Connection.RemoteIpAddress?.GetAddressBytes() is { } bytes
-            ? Convert.ToBase64String(bytes)
-            : "unknown";
+        var key = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: key,
             factory: _ => new FixedWindowRateLimiterOptions
@@ -256,26 +254,3 @@ finally
 
 
 public partial class Program { }
-
-public static class SequentialGuidGenerator
-{
-    public static Guid Create()
-    {
-        var guidBytes = Guid.NewGuid().ToByteArray();
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var timestampBytes = BitConverter.GetBytes(timestamp);
-
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(timestampBytes);
-        }
-
-        var result = new byte[16];
-        // Copiar 6 bytes del timestamp (suficiente para ~8000 años)
-        Buffer.BlockCopy(timestampBytes, 2, result, 0, 6);
-        // Copiar los otros 10 bytes de aleatoriedad
-        Buffer.BlockCopy(guidBytes, 6, result, 6, 10);
-
-        return new Guid(result);
-    }
-}
