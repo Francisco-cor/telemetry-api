@@ -9,6 +9,8 @@ using Telemetry.Api.Infra;
 
 public class TelemetryApiFactory : WebApplicationFactory<Program>
 {
+    // Each factory instance gets its own in-memory DB name to avoid cross-class conflicts.
+    private readonly string _dbName = $"inmem_{Guid.NewGuid():N}";
     private SqliteConnection? _conn;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -21,7 +23,7 @@ public class TelemetryApiFactory : WebApplicationFactory<Program>
         {
             var dict = new Dictionary<string, string?>
             {
-                ["ConnectionStrings:Db"] = "DataSource=file:inmem?mode=memory&cache=shared"
+                ["ConnectionStrings:Db"] = $"DataSource=file:{_dbName}?mode=memory&cache=shared"
             };
             config.AddInMemoryCollection(dict);
         });
@@ -33,7 +35,7 @@ public class TelemetryApiFactory : WebApplicationFactory<Program>
             if (dbCtx is not null) services.Remove(dbCtx);
 
             // 4) Registrar SQLite en memoria (conexión compartida para que no se pierda al abrir/cerrar scopes)
-            _conn = new SqliteConnection("DataSource=file:inmem?mode=memory&cache=shared");
+            _conn = new SqliteConnection($"DataSource=file:{_dbName}?mode=memory&cache=shared");
             _conn.Open();
 
             services.AddDbContext<TelemDb>(o => o.UseSqlite(_conn));
