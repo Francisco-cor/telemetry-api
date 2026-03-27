@@ -253,6 +253,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "Startup or migration failed.");
+    throw;
 }
 finally
 {
