@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -133,8 +134,8 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 // --- Endpoints ---
-app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live"), ResponseWriter = WriteHealthJson });
-app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready"), ResponseWriter = WriteHealthJson });
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = s_livePredicate, ResponseWriter = WriteHealthJson });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = s_readyPredicate, ResponseWriter = WriteHealthJson });
 
 // ---------- POST /api/telemetry ----------
 app.MapPost("/api/telemetry", async (
@@ -148,7 +149,13 @@ app.MapPost("/api/telemetry", async (
         var validation = await validator.ValidateAsync(batch);
         if (!validation.IsValid)
         {
-            var details = new ProblemDetails { Title = "Invalid payload", Detail = string.Join("; ", validation.Errors.Select(e => $"{e.PropertyName}: {e.ErrorMessage}")) };
+            var sb = new StringBuilder();
+            foreach (var e in validation.Errors)
+            {
+                if (sb.Length > 0) sb.Append("; ");
+                sb.Append(e.PropertyName).Append(": ").Append(e.ErrorMessage);
+            }
+            var details = new ProblemDetails { Title = "Invalid payload", Detail = sb.ToString() };
             return Results.BadRequest(details);
         }
         // Usar GUIDs secuenciales para evitar fragmentación
@@ -253,4 +260,11 @@ finally
 }
 
 
-public partial class Program { }
+public partial class Program
+{
+    // Cached delegates – allocated once at startup, reused on every health check poll.
+    private static readonly Func<HealthCheckRegistration, bool> s_livePredicate =
+        r => r.Tags.Contains("live");
+    private static readonly Func<HealthCheckRegistration, bool> s_readyPredicate =
+        r => r.Tags.Contains("ready");
+}
